@@ -1,12 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sync/atomic"
 )
 
+type Backends struct {
+	Backends []string `json:"backends"`
+}
 type Balancer struct {
 	backends []*url.URL
 	next     atomic.Uint64
@@ -42,11 +47,14 @@ func NewBalancer(backends []string) *Balancer {
 }
 
 func main() {
-	backends := []string{
-		"http://localhost:9000",
-		"http://localhost:9001",
-		"http://localhost:9002",
+	data, err := os.ReadFile("config.json")
+	if err != nil {
+		panic(err)
 	}
-	b := NewBalancer(backends)
+	var backends Backends
+	if err := json.Unmarshal(data, &backends); err != nil {
+		panic(err)
+	}
+	b := NewBalancer(backends.Backends)
 	http.ListenAndServe(":8000", b)
 }
