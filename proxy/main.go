@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/signal"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
@@ -65,7 +68,7 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	return b
 }
 
-func getContainers(options container.ListOptions) []container.Summary {
+func getContainers(ctx context.Context, options container.ListOptions) []container.Summary {
 	apiClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		panic(err)
@@ -74,15 +77,15 @@ func getContainers(options container.ListOptions) []container.Summary {
 
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "service=hello")
-	containers, err := apiClient.ContainerList(context.Background(), options)
+	containers, err := apiClient.ContainerList(ctx, options)
 	if err != nil {
 		panic(err)
 	}
 	return containers
 }
 
-func listenForEvents(cli *client.Client, options events.ListOptions) {
-	msgChan, errChan := cli.Events(context.Background(), options)
+func listenForEvents(ctx context.Context, cli *client.Client, options events.ListOptions) {
+	msgChan, errChan := cli.Events(ctx, options)
 	for {
 		select {
 		case msg := <-msgChan:
@@ -93,6 +96,8 @@ func listenForEvents(cli *client.Client, options events.ListOptions) {
 				log.Fatalf("Event stream error: %v", err)
 			}
 			return
+		case <-ctx.Done():
+			log.Println("Terminating container event listener")
 		}
 	}
 }
@@ -125,11 +130,14 @@ func main() {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "service=hello")
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 	listOptions := container.ListOptions{Filters: filterArgs}
-
-	containers := getContainers(listOptions)
-
+	// get containers at runtime
+	containers := getContainers(ctx, listOptions)
+	// initiate load balancer with said containers
 	proxy := NewBalancer(containers)
 
+	go listenForEvents(ctx, cli, events.ListOptions{Filters: filterArgs})
 	http.ListenAndServe(":8000", proxy)
 }
