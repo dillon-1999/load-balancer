@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"os/signal"
 	"strings"
 	"sync"
@@ -160,7 +159,7 @@ func main() {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "service=hello")
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	listOptions := container.ListOptions{Filters: filterArgs}
 	// get containers at runtime
