@@ -89,7 +89,6 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	b.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			target := b.pick()
-			fmt.Println(target)
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
 		},
@@ -97,16 +96,10 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	return b
 }
 
-func GetContainers(ctx context.Context, options container.ListOptions) []container.Summary {
-	apiClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		panic(err)
-	}
-	defer apiClient.Close()
-
+func GetContainers(ctx context.Context, cli *client.Client, options container.ListOptions) []container.Summary {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "service=hello")
-	containers, err := apiClient.ContainerList(ctx, options)
+	containers, err := cli.ContainerList(ctx, options)
 	if err != nil {
 		panic(err)
 	}
@@ -118,7 +111,7 @@ func ListenForEvents(ctx context.Context, cli *client.Client, options events.Lis
 	for {
 		select {
 		case msg := <-msgChan:
-			fmt.Printf("Event: %s | Container: %s | Image: %s\n",
+			log.Printf("Event: %s | Container: %s | Image: %s\n",
 				msg.Action, msg.Actor.ID[:12], msg.Actor.Attributes["image"])
 		case err := <-errChan:
 			if err != nil {
@@ -137,11 +130,11 @@ func PrepareUrlFromContainer(c container.Summary) (*url.URL, error) {
 	}
 	name := strings.ReplaceAll(c.Names[0], "/", "")
 	if len(c.Ports) == 0 {
-		fmt.Errorf("no port open for container %s", c.ID)
+		return nil, fmt.Errorf("no port open for container %s", c.ID)
 	}
 	port := c.Ports[0]
 	url_str := fmt.Sprintf("http://%s:%d", name, port.PrivatePort)
-	fmt.Println(url_str)
+	log.Println(url_str)
 	url, err := url.Parse(url_str)
 	if err != nil {
 		return nil, err
@@ -161,9 +154,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
 	listOptions := container.ListOptions{Filters: filterArgs}
 	// get containers at runtime
-	containers := GetContainers(ctx, listOptions)
+	containers := GetContainers(ctx, cli, listOptions)
 	// initiate load balancer with said containers
 	proxy := NewBalancer(containers)
 
