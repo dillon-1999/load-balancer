@@ -79,7 +79,7 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	pool := ContainerPool{}
 	b := &Balancer{pool: &pool}
 	for _, u := range backends {
-		url, err := prepareUrlFromContainer(u)
+		url, err := PrepareUrlFromContainer(u)
 		if err != nil {
 			panic(err)
 		}
@@ -98,7 +98,7 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	return b
 }
 
-func getContainers(ctx context.Context, options container.ListOptions) []container.Summary {
+func GetContainers(ctx context.Context, options container.ListOptions) []container.Summary {
 	apiClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		panic(err)
@@ -114,7 +114,7 @@ func getContainers(ctx context.Context, options container.ListOptions) []contain
 	return containers
 }
 
-func listenForEvents(ctx context.Context, cli *client.Client, options events.ListOptions) {
+func ListenForEvents(ctx context.Context, cli *client.Client, options events.ListOptions, balancer *Balancer) {
 	msgChan, errChan := cli.Events(ctx, options)
 	for {
 		select {
@@ -132,7 +132,7 @@ func listenForEvents(ctx context.Context, cli *client.Client, options events.Lis
 	}
 }
 
-func prepareUrlFromContainer(c container.Summary) (*url.URL, error) {
+func PrepareUrlFromContainer(c container.Summary) (*url.URL, error) {
 	if len(c.Names) == 0 {
 		return nil, fmt.Errorf("no name provided in container summary for container %s", c.ID)
 	}
@@ -164,10 +164,10 @@ func main() {
 	defer stop()
 	listOptions := container.ListOptions{Filters: filterArgs}
 	// get containers at runtime
-	containers := getContainers(ctx, listOptions)
+	containers := GetContainers(ctx, listOptions)
 	// initiate load balancer with said containers
 	proxy := NewBalancer(containers)
 
-	go listenForEvents(ctx, cli, events.ListOptions{Filters: filterArgs})
+	go ListenForEvents(ctx, cli, events.ListOptions{Filters: filterArgs}, proxy)
 	http.ListenAndServe(":8000", proxy)
 }
