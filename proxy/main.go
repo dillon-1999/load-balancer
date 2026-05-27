@@ -38,12 +38,19 @@ type ContainerPool struct {
 func (p *ContainerPool) AddBackend(backend ContainerBackend) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	log.Println("Adding backend:", backend.ContainerID)
+	for _, b := range p.backends {
+		if b.ContainerID == backend.ContainerID {
+			return // Backend already exists, do not add again
+		}
+	}
 	p.backends = append(p.backends, backend)
 }
 
 func (p *ContainerPool) RemoveBackend(containerID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	log.Println("Removing backend:", containerID)
 	for i, backend := range p.backends {
 		if backend.ContainerID == containerID {
 			p.backends = append(p.backends[:i], p.backends[i+1:]...)
@@ -72,12 +79,11 @@ func NewBalancer(backends []container.Summary) *Balancer {
 	pool := ContainerPool{}
 	b := &Balancer{pool: &pool}
 	for _, u := range backends {
-
 		url, err := prepareUrlFromContainer(u)
 		if err != nil {
 			panic(err)
 		}
-		backend := ContainerBackend{u.ID, url}
+		backend := ContainerBackend{u.ID[:12], url}
 		pool.AddBackend(backend)
 	}
 
