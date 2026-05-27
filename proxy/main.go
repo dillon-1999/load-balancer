@@ -74,11 +74,53 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.proxy.ServeHTTP(w, r)
 }
 
+// catch basic start/stop actions to update the pool of backends in the load balancer
+func (b *Balancer) UpdatePool(ctx context.Context, cli *client.Client, event events.Message) {
+	switch event.Action {
+	case events.ActionStart:
+		// get container details
+		containerJSON, err := cli.ContainerInspect(ctx, event.Actor.ID)
+		if err != nil {
+			log.Printf("Error inspecting container %s: %v", event.Actor.ID, err)
+			return
+		}
+		ports := containerJSON.Config.ExposedPorts
+		if len(ports) == 0 {
+			log.Printf("Container %s has no exposed ports, skipping", event.Actor.ID)
+			return
+		}
+
+		// for now, just pick the first port
+		var port int
+		for k, _ := range ports {
+			port = k.Int()
+			break
+		}
+		url, err := PrepareUrlFromContainer(containerJSON.Name, port)
+		if err != nil {
+			log.Printf("Error preparing URL for container %s: %v", event.Actor.ID, err)
+			return
+		}
+		backend := ContainerBackend{event.Actor.ID[:12], url}
+		b.pool.AddBackend(backend)
+	case events.ActionStop:
+		b.pool.RemoveBackend(event.Actor.ID[:12])
+	}
+}
+
 func NewBalancer(backends []container.Summary) *Balancer {
 	pool := ContainerPool{}
 	b := &Balancer{pool: &pool}
 	for _, u := range backends {
-		url, err := PrepareUrlFromContainer(u)
+		if len(u.Names) == 0 {
+			continue
+		}
+		if len(u.Ports) == 0 {
+			continue
+		}
+		name := u.Names[0]
+		port := u.Ports[0].PrivatePort
+		url, err := PrepareUrlFromContainer(name, int(port))
 		if err != nil {
 			panic(err)
 		}
@@ -111,8 +153,7 @@ func ListenForEvents(ctx context.Context, cli *client.Client, options events.Lis
 	for {
 		select {
 		case msg := <-msgChan:
-			log.Printf("Event: %s | Container: %s | Image: %s\n",
-				msg.Action, msg.Actor.ID[:12], msg.Actor.Attributes["image"])
+			balancer.UpdatePool(ctx, cli, msg)
 		case err := <-errChan:
 			if err != nil {
 				log.Fatalf("Event stream error: %v", err)
@@ -124,17 +165,9 @@ func ListenForEvents(ctx context.Context, cli *client.Client, options events.Lis
 	}
 }
 
-func PrepareUrlFromContainer(c container.Summary) (*url.URL, error) {
-	if len(c.Names) == 0 {
-		return nil, fmt.Errorf("no name provided in container summary for container %s", c.ID)
-	}
-	name := strings.ReplaceAll(c.Names[0], "/", "")
-	if len(c.Ports) == 0 {
-		return nil, fmt.Errorf("no port open for container %s", c.ID)
-	}
-	port := c.Ports[0]
-	url_str := fmt.Sprintf("http://%s:%d", name, port.PrivatePort)
-	log.Println(url_str)
+func PrepareUrlFromContainer(name string, port int) (*url.URL, error) {
+	name = strings.ReplaceAll(name, "/", "")
+	url_str := fmt.Sprintf("http://%s:%d", name, port)
 	url, err := url.Parse(url_str)
 	if err != nil {
 		return nil, err
