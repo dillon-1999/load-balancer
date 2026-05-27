@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -29,8 +30,30 @@ type ContainerBackend struct {
 	URL         *url.URL
 }
 
-type Balancer struct {
+type ContainerPool struct {
 	backends []ContainerBackend
+	mu       sync.RWMutex
+}
+
+func (p *ContainerPool) AddBackend(backend ContainerBackend) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.backends = append(p.backends, backend)
+}
+
+func (p *ContainerPool) RemoveBackend(containerID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, backend := range p.backends {
+		if backend.ContainerID == containerID {
+			p.backends = append(p.backends[:i], p.backends[i+1:]...)
+			return
+		}
+	}
+}
+
+type Balancer struct {
+	pool *ContainerPool
 
 	next  atomic.Uint64
 	proxy *httputil.ReverseProxy
@@ -38,7 +61,7 @@ type Balancer struct {
 
 func (b *Balancer) pick() *url.URL {
 	i := b.next.Add(1)
-	return b.backends[int(i)%len(b.backends)].URL
+	return b.pool.backends[int(i)%len(b.pool.backends)].URL
 }
 
 func (b *Balancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +69,8 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func NewBalancer(backends []container.Summary) *Balancer {
-	b := &Balancer{}
+	pool := ContainerPool{}
+	b := &Balancer{pool: &pool}
 	for _, u := range backends {
 
 		url, err := prepareUrlFromContainer(u)
@@ -54,7 +78,7 @@ func NewBalancer(backends []container.Summary) *Balancer {
 			panic(err)
 		}
 		backend := ContainerBackend{u.ID, url}
-		b.backends = append(b.backends, backend)
+		pool.AddBackend(backend)
 	}
 
 	b.proxy = &httputil.ReverseProxy{
